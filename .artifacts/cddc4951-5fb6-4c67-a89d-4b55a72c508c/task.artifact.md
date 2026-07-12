@@ -1,0 +1,4 @@
+- [x] Disable Kotlin incremental compilation in `gradle.properties`
+- [x] Run `flutter clean`
+- [x] Run `flutter pub get`
+- [x] Verify build (Note: Service creation error in agent environment is expected; user should verify in their terminal)
