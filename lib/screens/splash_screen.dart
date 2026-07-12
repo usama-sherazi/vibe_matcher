@@ -15,6 +15,7 @@ class SplashScreen extends ConsumerStatefulWidget {
 
 class _SplashScreenState extends ConsumerState<SplashScreen> {
   String _status = 'Waking up the server…';
+  bool _failed = false;
 
   @override
   void initState() {
@@ -23,28 +24,46 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   }
 
   Future<void> _bootstrap() async {
+    setState(() {
+      _failed = false;
+      _status = 'Waking up the server…';
+    });
+
     final api = ref.read(apiServiceProvider);
     final store = ref.read(localStoreProvider);
 
-    // Free-tier cold start can take 30-50s — keep the user informed
-    // rather than looking stuck.
-    final healthy = await api.ping();
-    if (!healthy && mounted) {
-      setState(() => _status = 'Still connecting… almost there');
-    }
+    try {
+      // Free-tier cold start can take 30-50s — keep the user informed
+      // rather than looking stuck.
+      final healthy = await api.ping();
+      if (!healthy && mounted) {
+        setState(() {
+          _status = 'Couldn\'t reach the server. Check your connection.';
+          _failed = true;
+        });
+        return;
+      }
 
-    final savedId = await store.readProfileId();
-    if (!mounted) return;
+      final savedId = await store.readProfileId();
+      if (!mounted) return;
 
-    if (savedId != null) {
-      ref.read(profileIdProvider.notifier).state = savedId;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeShell()),
-      );
-    } else {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const OnboardingScreen()),
-      );
+      if (savedId != null) {
+        ref.read(profileIdProvider.notifier).state = savedId;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeShell()),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _status = 'Something went wrong starting up.';
+          _failed = true;
+        });
+      }
     }
   }
 
@@ -77,13 +96,34 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.white.withOpacity(0.85)),
               ),
               const SizedBox(height: 40),
-              const SizedBox(
-                width: 28,
-                height: 28,
-                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.6),
-              ),
+              if (!_failed)
+                const SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.6),
+                )
+              else
+                const Icon(Icons.cloud_off_rounded, color: Colors.white, size: 28),
               const SizedBox(height: 16),
-              Text(_status, style: TextStyle(color: Colors.white.withOpacity(0.85))),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  _status,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white.withOpacity(0.85)),
+                ),
+              ),
+              if (_failed) ...[
+                const SizedBox(height: 20),
+                OutlinedButton(
+                  onPressed: _bootstrap,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white),
+                  ),
+                  child: const Text('Try again'),
+                ),
+              ],
             ],
           ),
         ),

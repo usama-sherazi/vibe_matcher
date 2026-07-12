@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/providers.dart';
-import '../theme/app_theme.dart';
 import '../widgets/match_card.dart';
+import '../widgets/shared_widgets.dart';
 import 'match_detail_screen.dart';
 
 class DiscoverScreen extends ConsumerWidget {
@@ -19,6 +19,7 @@ class DiscoverScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Refresh matches',
             onPressed: () => ref.invalidate(matchesProvider),
           ),
         ],
@@ -28,17 +29,10 @@ class DiscoverScreen extends ConsumerWidget {
         child: matchesAsync.when(
           data: (matches) {
             if (matches.isEmpty) {
-              return ListView(
-                padding: const EdgeInsets.all(32),
-                children: const [
-                  SizedBox(height: 80),
-                  Icon(Icons.people_outline_rounded, size: 56, color: AppColors.inkSoft),
-                  SizedBox(height: 16),
-                  Text(
-                    'No matches yet — check back soon, or pull down to refresh.',
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+              return const EmptyState(
+                icon: Icons.people_outline_rounded,
+                title: 'No matches yet',
+                message: 'Check back soon, or pull down to refresh.',
               );
             }
             return ListView.separated(
@@ -60,21 +54,12 @@ class DiscoverScreen extends ConsumerWidget {
             );
           },
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (err, _) => ListView(
-            padding: const EdgeInsets.all(32),
-            children: [
-              const SizedBox(height: 80),
-              const Icon(Icons.cloud_off_rounded, size: 56, color: AppColors.inkSoft),
-              const SizedBox(height: 16),
-              Text('Couldn\'t load matches.\n$err', textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              Center(
-                child: OutlinedButton(
-                  onPressed: () => ref.invalidate(matchesProvider),
-                  child: const Text('Try again'),
-                ),
-              ),
-            ],
+          error: (err, _) => EmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Couldn\'t load matches',
+            message: err.toString(),
+            actionLabel: 'Try again',
+            onAction: () => ref.invalidate(matchesProvider),
           ),
         ),
       ),

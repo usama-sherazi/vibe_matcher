@@ -27,6 +27,18 @@ final matchesProvider = FutureProvider.autoDispose<List<MatchResult>>((ref) asyn
   return api.getMatches(id, topK: 12);
 });
 
+/// Whether the admin panel has been unlocked for this app session.
+/// Intentionally NOT persisted — every fresh launch requires the PIN
+/// again. See lib/config/admin_config.dart for the important caveat
+/// about this being a UI-level gate only, not real backend auth.
+final adminUnlockedProvider = StateProvider<bool>((ref) => false);
+
+/// Every profile in the system — admin panel only.
+final allProfilesProvider = FutureProvider.autoDispose<List<Profile>>((ref) async {
+  final api = ref.watch(apiServiceProvider);
+  return api.getAllProfiles();
+});
+
 /// Mutable draft used across the onboarding / edit-profile flow.
 class ProfileDraftNotifier extends StateNotifier<Profile> {
   ProfileDraftNotifier([Profile? initial]) : super(initial ?? Profile.empty());

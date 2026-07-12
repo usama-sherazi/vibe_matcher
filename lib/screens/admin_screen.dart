@@ -26,56 +26,73 @@ class AdminAccess {
   }
 
   static Future<bool> _promptPin(BuildContext context) async {
-    final controller = TextEditingController();
-    String? error;
-
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: const Text('Admin access'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Enter the admin PIN to view and manage all profiles.'),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                obscureText: true,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                textInputAction: TextInputAction.done,
-                decoration: InputDecoration(labelText: 'PIN', errorText: error),
-                onSubmitted: (_) {
-                  if (controller.text == kAdminPin) {
-                    Navigator.pop(ctx, true);
-                  } else {
-                    setState(() => error = 'Incorrect PIN');
-                  }
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                if (controller.text == kAdminPin) {
-                  Navigator.pop(ctx, true);
-                } else {
-                  setState(() => error = 'Incorrect PIN');
-                }
-              },
-              child: const Text('Unlock'),
-            ),
-          ],
-        ),
-      ),
+      builder: (ctx) => const _AdminPinDialog(),
     );
-    controller.dispose();
     return result ?? false;
+  }
+}
+
+/// A dedicated StatefulWidget for the PIN prompt — not a StatefulBuilder
+/// with a manually-disposed controller. Flutter needs to own this
+/// controller's lifecycle itself (via State.dispose) so it doesn't get
+/// torn down while the dialog's closing animation is still running,
+/// which is what caused the "TextEditingController used after being
+/// disposed" crash.
+class _AdminPinDialog extends StatefulWidget {
+  const _AdminPinDialog();
+
+  @override
+  State<_AdminPinDialog> createState() => _AdminPinDialogState();
+}
+
+class _AdminPinDialogState extends State<_AdminPinDialog> {
+  final _controller = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_controller.text == kAdminPin) {
+      Navigator.pop(context, true);
+    } else {
+      setState(() => _error = 'Incorrect PIN');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Admin access'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Enter the admin PIN to view and manage all profiles.'),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(labelText: 'PIN', errorText: _error),
+            onChanged: _error == null ? null : (_) => setState(() => _error = null),
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(onPressed: _submit, child: const Text('Unlock')),
+      ],
+    );
   }
 }
 
@@ -336,15 +353,15 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
                               ),
                               isDeleting
                                   ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(strokeWidth: 2.2),
-                                    )
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2.2),
+                              )
                                   : IconButton(
-                                      icon: const Icon(Icons.delete_outline_rounded, color: AppColors.coralDeep),
-                                      tooltip: 'Delete profile',
-                                      onPressed: () => _deleteProfile(profile, myId: myId),
-                                    ),
+                                icon: const Icon(Icons.delete_outline_rounded, color: AppColors.coralDeep),
+                                tooltip: 'Delete profile',
+                                onPressed: () => _deleteProfile(profile, myId: myId),
+                              ),
                             ],
                           ),
                         );

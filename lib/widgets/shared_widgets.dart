@@ -125,6 +125,9 @@ class SelectField extends StatelessWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: () async {
+        // Picking from a modal never needs the keyboard — make sure
+        // it isn't left open behind the sheet from a previous field.
+        FocusManager.instance.primaryFocus?.unfocus();
         final choice = await showModalBottomSheet<String>(
           context: context,
           backgroundColor: Colors.white,
@@ -349,6 +352,137 @@ class SectionLabel extends StatelessWidget {
               color: AppColors.indigo,
               letterSpacing: 0.6,
             ),
+      ),
+    );
+  }
+}
+
+/// Wraps a screen body so tapping anywhere outside an active text
+/// field dismisses the keyboard. Cheap insurance against the keyboard
+/// staying open when it's no longer relevant to what's on screen.
+class KeyboardDismissible extends StatelessWidget {
+  const KeyboardDismissible({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+      child: child,
+    );
+  }
+}
+
+/// Consistent empty/error/info state used across list screens —
+/// swaps repeated bespoke ListView+Icon+Text blocks for one widget.
+class EmptyState extends StatelessWidget {
+  const EmptyState({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.message,
+    this.actionLabel,
+    this.onAction,
+    this.iconColor,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+  final Color? iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        const SizedBox(height: 72),
+        Icon(icon, size: 56, color: iconColor ?? AppColors.inkSoft),
+        const SizedBox(height: 16),
+        Text(title, textAlign: TextAlign.center, style: theme.textTheme.titleMedium),
+        if (message != null) ...[
+          const SizedBox(height: 6),
+          Text(message!, textAlign: TextAlign.center, style: theme.textTheme.bodyMedium),
+        ],
+        if (actionLabel != null && onAction != null) ...[
+          const SizedBox(height: 20),
+          Center(
+            child: OutlinedButton(onPressed: onAction, child: Text(actionLabel!)),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Standard "are you sure" dialog. Returns true only if the person
+/// tapped the confirming action.
+Future<bool> confirmDialog(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String confirmLabel = 'Confirm',
+  String cancelLabel = 'Cancel',
+  bool destructive = false,
+}) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(cancelLabel)),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(
+            confirmLabel,
+            style: TextStyle(color: destructive ? AppColors.coralDeep : AppColors.indigo),
+          ),
+        ),
+      ],
+    ),
+  );
+  return result ?? false;
+}
+
+/// A compact search field with a clear button, used on the admin
+/// profile list. Closes the keyboard on submit rather than leaving it
+/// hovering over the results.
+class SearchField extends StatelessWidget {
+  const SearchField({
+    super.key,
+    required this.controller,
+    required this.onChanged,
+    this.hintText = 'Search',
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final String hintText;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      onChanged: onChanged,
+      textInputAction: TextInputAction.search,
+      onSubmitted: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+      decoration: InputDecoration(
+        hintText: hintText,
+        prefixIcon: const Icon(Icons.search_rounded, size: 20),
+        suffixIcon: controller.text.isEmpty
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.clear_rounded, size: 18),
+                onPressed: () {
+                  controller.clear();
+                  onChanged('');
+                },
+              ),
       ),
     );
   }
