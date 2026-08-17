@@ -1,11 +1,11 @@
 {
-    "name": "vibe_connect",
-    "short_name": "vibe_connect",
+    "name": "Vibe Connect",
+    "short_name": "Vibe Connect",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#5B4FE9",
+    "theme_color": "#FF6F61",
+    "description": "Find friends who actually get you.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

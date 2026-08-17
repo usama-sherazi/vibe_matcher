@@ -1,0 +1,132 @@
+Vibe Connect — Backend API Guide (for App Developer)
+Base URL: https://vibe-connect-si0i.onrender.com Format: All requests/responses are JSON. No authentication is required yet (add an API key layer before public launch).
+⚠️ Free-tier cold start: The server sleeps after ~15 min of no traffic. The first request after idle time can take 30–50s to respond. Show a loading state on first launch/resume.
+1. Data Model — "Profile"
+A profile is the core object the app creates, matches, and displays.
+json
+{
+"id": "uuid-string",
+"name": "Ayesha",
+"age": 22,
+"city": "Lahore",
+"bio": "free text, 1-3 sentences",
+"interests": "comma-separated: reading, travel, art",
+"goals": "free text: what kind of friends they want",
+"values": ["kindness", "loyalty"],
+"traits": {
+"openness": 0-100, "conscientiousness": 0-100, "extraversion": 0-100,
+"agreeableness": 0-100, "neuroticism": 0-100
+},
+"extras": {
+"social_energy": 0-100, "friendship_depth": 0-100,
+"emotional_expressiveness": 0-100, "routine_adventure": 0-100,
+"availability": "flexible",
+"communication_style": "warm and expressive",
+"conflict_style": "take space then discuss",
+"attachment_style": "secure",
+"support_style": "good listener"
+},
+"created_at": "iso timestamp",
+"updated_at": "iso timestamp"
+}
+Allowed values for dropdowns/pickers in the app
+Field
+Options
+values (multi-select)
+honesty, loyalty, kindness, ambition, creativity, faith, family, fitness, learning, career, humor, adventure, peace, emotional support, respect, independence
+availability
+mostly weekdays, mostly weekends, evenings, late night, flexible, online only, in person preferred
+communication_style
+warm and expressive, direct and honest, calm and thoughtful, funny and casual, practical and solution-focused
+conflict_style
+talk it out quickly, take space then discuss, avoid conflict, use humor to cool down, write thoughts first
+attachment_style
+secure, anxious, avoidant, mixed / unsure
+support_style
+good listener, problem solver, motivator, fun companion, calm advisor, accountability partner
+traits and extras sliders (0–100) can be sent from onboarding sliders in the app. If omitted, defaults are 50.
+2. Endpoints
+Method
+Path
+Purpose
+GET
+/health
+Check server + DB are up
+POST
+/api/profiles
+Create or update a profile
+GET
+/api/profiles
+List all profiles
+GET
+/api/profiles/<id>
+Get one profile
+DELETE
+/api/profiles/<id>
+Delete a profile
+GET
+/api/profiles/<id>/matches?top_k=5
+Ranked match list for a profile
+GET
+/api/profiles/<id>/compare/<candidate_id>
+Full compatibility breakdown for two specific people
+POST
+/api/admin/demo-profiles
+Seed 6 demo profiles (testing only)
+POST
+/api/admin/reset
+Wipe all profiles (testing only — do not expose in production UI)
+POST
+/api/assessment
+Standalone Big Five snapshot, no DB write
+POST /api/profiles — create/update
+Body: any subset of the Profile fields above (name required). Include "id" to update an existing profile instead of creating a new one.
+json
+// Request
+{ "name": "Ayesha", "age": 22, "city": "Lahore",
+"bio": "...", "interests": "reading, art, travel", "goals": "...",
+"values": ["kindness", "honesty"],
+"traits": { "openness": 70, "conscientiousness": 60, "extraversion": 40, "agreeableness": 80, "neuroticism": 40 },
+"extras": { "social_energy": 40, "availability": "flexible", "communication_style": "calm and thoughtful", ... } }
+// Response 201
+{ "id": "uuid", "profile": { ...full saved profile... } }
+GET /api/profiles/<id>/matches?top_k=5
+Returns the top-K best matches for that profile, sorted by score.
+json
+[
+{
+"match_id": "uuid",
+"name": "Ayesha",
+"age": 22,
+"city": "Lahore",
+"score": 79.08,
+"summary": "Strong match: TestUser and Ayesha scored 79.1/100...",
+"strengths": ["Shared values: kindness, honesty", "..."],
+"watchouts": ["..."],
+"suggested_opener": "Hey Ayesha, I noticed we both value creativity..."
+}
+]
+Use score for the match badge/percentage, summary for the match card subtitle, suggested_opener as a pre-filled chat starter, strengths/watchouts for an "About this match" expandable section.
+GET /api/profiles/<id>/compare/<candidate_id>
+Same shape as one match item above, but with full score breakdown (components, big5_detail, interest_detail, etc.) — use this for a detailed "match report" screen when a user taps into a specific match.
+POST /api/assessment
+Send raw slider values, get back a readable snapshot — useful for an onboarding "personality result" screen before the profile is even saved.
+json
+// Request: { "openness": 80, "conscientiousness": 65, "extraversion": 30, "agreeableness": 75, "neuroticism": 60 }
+// Response: { "snapshot": { "openness": {"score": 80, "level": "High"}, ... }, "notes": ["You may enjoy creative, curious, and idea-driven friends.", ...] }
+Errors
+All errors return {"error": "message"} with a matching HTTP status (400 bad input, 404 not found, 500 server/DB issue). Always check response.ok before parsing.
+3. Suggested App Integration Flow
+App launch: ping GET /health; if it fails, show "connecting..." and retry (handles cold start).
+Onboarding: collect name/age/city/bio/interests/goals + slider values + dropdown picks → POST /api/profiles → store returned id locally (e.g. secure storage) as the user's profile ID.
+Optional "personality preview" screen: call POST /api/assessment live as the user drags sliders, before final save.
+Home/discovery feed: GET /api/profiles/<my_id>/matches?top_k=10 → render as swipeable/list cards using score, summary, suggested_opener.
+Match detail screen: GET /api/profiles/<my_id>/compare/<candidate_id> → show full breakdown.
+Edit profile: POST /api/profiles again with the same id to update.
+Delete account: DELETE /api/profiles/<my_id>.
+Testing during development: use /api/admin/demo-profiles to seed sample users to swipe against, and /api/admin/reset to clear test data. Remove any UI access to these before release.
+4. Notes for Production Hardening (before public launch)
+Add an API key or JWT auth header — currently anyone with the URL can hit every endpoint.
+Restrict CORS to your app's actual domain instead of *.
+Move /api/admin/* behind a separate protected route or remove entirely.
+Consider upgrading off Render's free tier to avoid cold starts once real users are active.

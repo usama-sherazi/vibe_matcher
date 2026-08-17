@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../models/models.dart';
+import '../navigation/app_nav.dart';
 import '../providers/providers.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 import 'home_shell.dart';
+import 'welcome_screen.dart';
 
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
@@ -23,6 +26,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   static const _stepCount = 4;
   static const _stepTitles = ['The basics', 'Your personality', 'Your preferences', 'Review'];
 
+  bool get _isEditing {
+    final draft = ref.read(profileDraftProvider);
+    return draft.id != null && draft.id!.isNotEmpty;
+  }
+
   @override
   void dispose() {
     _pageController.dispose();
@@ -34,8 +42,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     return draft.name.trim().isNotEmpty && draft.city.trim().isNotEmpty && draft.age >= 13;
   }
 
-  /// The keyboard is only ever relevant on step 0 (text fields) — make
-  /// sure it never rides along into the slider/chip/review steps.
   void _unfocus() => FocusManager.instance.primaryFocus?.unfocus();
 
   void _goTo(int step) {
@@ -73,21 +79,40 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     _goTo(_step - 1);
   }
 
+  Future<void> _switchAccount() async {
+    await ref.read(authServiceProvider).logout();
+    await clearSessionState(ref);
+    if (!mounted) return;
+    replaceRoot(context, const WelcomeScreen());
+  }
+
   Future<void> _submit() async {
+    if (_saving) return;
     setState(() {
       _saving = true;
       _error = null;
     });
     final draft = ref.read(profileDraftProvider);
-    final api = ref.read(apiServiceProvider);
-    final store = ref.read(localStoreProvider);
+    final editing = _isEditing;
     try {
-      final saved = await api.saveProfile(draft);
+      final saved = await ref.read(apiServiceProvider).saveProfile(draft);
       if (saved.id == null) throw ApiException(500, 'Profile saved but no id was returned.');
-      await store.saveProfileId(saved.id!);
-      ref.read(profileIdProvider.notifier).state = saved.id;
+      final user = ref.read(currentUserProvider);
+      if (user != null) {
+        final updated = await ref.read(authServiceProvider).linkProfile(user.id, saved.id);
+        await applySession(ref, updated);
+      } else {
+        await ref.read(localStoreProvider).saveProfileId(saved.id!);
+        ref.read(profileIdProvider.notifier).state = saved.id;
+      }
+      ref.invalidate(myProfileProvider);
+      ref.invalidate(matchesProvider);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const HomeShell()));
+      if (editing) {
+        Navigator.of(context).pop();
+      } else {
+        replaceRoot(context, const HomeShell());
+      }
     } catch (e) {
       setState(() => _error = e is ApiException ? e.message : 'Could not save your profile. Please try again.');
     } finally {
@@ -97,37 +122,38 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final editing = _isEditing;
     return PopScope(
-      // Only let the hardware/gesture back action leave the screen on
-      // step 0 — otherwise it should walk back through the wizard,
-      // matching what the on-screen back arrow does.
       canPop: _step == 0,
-      onPopInvoked: (didPop) {
+      onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _back();
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: true,
         body: SafeArea(
           child: Column(
             children: [
-              _Header(step: _step, stepCount: _stepCount, title: _stepTitles[_step], onBack: _step > 0 ? _back : null),
+              _Header(
+                step: _step,
+                stepCount: _stepCount,
+                title: _stepTitles[_step],
+                onBack: _step > 0 ? _back : (editing ? () => Navigator.of(context).maybePop() : null),
+              ),
+              if (!editing)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: TextButton(
+                      onPressed: _saving ? null : _switchAccount,
+                      child: const Text('Use a different account'),
+                    ),
+                  ),
+                ),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFCE9E7),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.error_outline_rounded, size: 18, color: AppColors.coralDeep),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(_error!, style: const TextStyle(color: AppColors.coralDeep))),
-                      ],
-                    ),
-                  ),
+                  child: VcErrorBanner(_error!),
                 ),
               Expanded(
                 child: PageView(
@@ -144,17 +170,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _saving ? null : _next,
-                    child: _saving
-                        ? const SizedBox(
-                      height: 22, width: 22,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.4),
-                    )
-                        : Text(_step == _stepCount - 1 ? 'Create my profile' : 'Continue'),
-                  ),
+                child: VcButton(
+                  label: _step == _stepCount - 1
+                      ? (editing ? 'Save changes' : 'Create my profile')
+                      : 'Continue',
+                  loading: _saving,
+                  onPressed: _next,
                 ),
               ),
             ],
@@ -174,6 +195,7 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 24, 16),
       child: Column(
@@ -188,7 +210,7 @@ class _Header extends StatelessWidget {
                 maintainState: true,
                 child: IconButton(
                   onPressed: onBack,
-                  icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: AppColors.ink),
+                  icon: Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: onSurface),
                   tooltip: 'Back',
                 ),
               ),
@@ -201,7 +223,7 @@ class _Header extends StatelessWidget {
                         height: 5,
                         margin: const EdgeInsets.symmetric(horizontal: 3),
                         decoration: BoxDecoration(
-                          color: active ? AppColors.coral : AppColors.ink.withOpacity(0.08),
+                          color: active ? AppColors.coral : onSurface.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(3),
                         ),
                       ),
@@ -238,16 +260,14 @@ class _StepperButton extends StatelessWidget {
         height: 32,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: AppColors.indigo.withOpacity(enabled ? 0.1 : 0.04),
+          color: AppColors.indigo.withValues(alpha: enabled ? 0.1 : 0.04),
           shape: BoxShape.circle,
         ),
-        child: Icon(icon, size: 18, color: enabled ? AppColors.indigo : AppColors.indigo.withOpacity(0.3)),
+        child: Icon(icon, size: 18, color: enabled ? AppColors.indigo : AppColors.indigo.withValues(alpha: 0.3)),
       ),
     );
   }
 }
-
-// ---------------------------------------------------------------- Step 1
 
 class _BasicsStep extends ConsumerStatefulWidget {
   const _BasicsStep();
@@ -264,8 +284,6 @@ class _BasicsStepState extends ConsumerState<_BasicsStep> {
   late final TextEditingController _goals;
   late int _age;
 
-  // One focus node per field so we can chain "next" presses and make
-  // sure the keyboard closes on the last field instead of lingering.
   final _nameFocus = FocusNode();
   final _cityFocus = FocusNode();
   final _bioFocus = FocusNode();
@@ -320,17 +338,18 @@ class _BasicsStepState extends ConsumerState<_BasicsStep> {
 
   void _sync() {
     ref.read(profileDraftProvider.notifier).updateBasics(
-      name: _name.text,
-      city: _city.text,
-      bio: _bio.text,
-      goals: _goals.text,
-      age: _age,
-      interests: _parsedInterests(),
-    );
+          name: _name.text,
+          city: _city.text,
+          bio: _bio.text,
+          goals: _goals.text,
+          age: _age,
+          interests: _parsedInterests(),
+        );
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return KeyboardDismissible(
       child: ListView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -375,12 +394,12 @@ class _BasicsStepState extends ConsumerState<_BasicsStep> {
                       child: Text('Age', style: Theme.of(context).textTheme.bodyMedium),
                     ),
                     Container(
-                      height: 40,
+                      height: 56,
                       padding: const EdgeInsets.symmetric(horizontal: 8),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: scheme.surface,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: AppColors.ink.withOpacity(0.08)),
+                        border: Border.all(color: scheme.onSurface.withValues(alpha: 0.08)),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -388,13 +407,19 @@ class _BasicsStepState extends ConsumerState<_BasicsStep> {
                           _StepperButton(
                             icon: Icons.remove_rounded,
                             enabled: _age > 13,
-                            onTap: () => setState(() { if (_age > 13) _age--; _sync(); }),
+                            onTap: () => setState(() {
+                              if (_age > 13) _age--;
+                              _sync();
+                            }),
                           ),
                           Text('$_age', style: Theme.of(context).textTheme.titleMedium),
                           _StepperButton(
                             icon: Icons.add_rounded,
                             enabled: _age < 100,
-                            onTap: () => setState(() { if (_age < 100) _age++; _sync(); }),
+                            onTap: () => setState(() {
+                              if (_age < 100) _age++;
+                              _sync();
+                            }),
                           ),
                         ],
                       ),
@@ -446,8 +471,6 @@ class _BasicsStepState extends ConsumerState<_BasicsStep> {
   }
 }
 
-// ---------------------------------------------------------------- Step 2
-
 class _PersonalityStep extends ConsumerStatefulWidget {
   const _PersonalityStep();
 
@@ -469,10 +492,7 @@ class _PersonalityStepState extends ConsumerState<_PersonalityStep> {
       final traits = ref.read(profileDraftProvider).traits;
       final snapshot = await ref.read(apiServiceProvider).assess(traits);
       if (mounted) setState(() => _snapshot = snapshot);
-    } catch (e) {
-      // This is a nice-to-have preview, not required to proceed — but
-      // if the person explicitly asked for it, tell them it failed
-      // rather than silently doing nothing.
+    } catch (_) {
       if (mounted) {
         setState(() => _snapshotError = 'Couldn\'t load a preview right now.');
       }
@@ -494,12 +514,13 @@ class _PersonalityStepState extends ConsumerState<_PersonalityStep> {
           style: Theme.of(context).textTheme.bodyMedium,
         ),
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+        VcCard(
           child: Column(
             children: [
-              TraitRadarChart(values: values, labels: kTraitKeys.map((k) => kTraitLabels[k]!.split(' ').first).toList()),
+              TraitRadarChart(
+                values: values,
+                labels: kTraitKeys.map((k) => kTraitLabels[k]!.split(' ').first).toList(),
+              ),
               if (_loadingSnapshot)
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
@@ -544,8 +565,6 @@ class _PersonalityStepState extends ConsumerState<_PersonalityStep> {
     );
   }
 }
-
-// ---------------------------------------------------------------- Step 3
 
 class _PreferencesStep extends ConsumerWidget {
   const _PreferencesStep();
@@ -612,8 +631,6 @@ class _PreferencesStep extends ConsumerWidget {
   }
 }
 
-// ---------------------------------------------------------------- Step 4
-
 class _ReviewStep extends ConsumerWidget {
   const _ReviewStep();
 
@@ -631,11 +648,15 @@ class _ReviewStep extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${draft.name.isEmpty ? "Your name" : draft.name}, ${draft.age}',
-                  style: theme.textTheme.headlineSmall?.copyWith(color: Colors.white)),
+              Text(
+                '${draft.name.isEmpty ? "Your name" : draft.name}, ${draft.age}',
+                style: theme.textTheme.headlineSmall?.copyWith(color: Colors.white),
+              ),
               const SizedBox(height: 4),
-              Text(draft.city.isEmpty ? 'Your city' : draft.city,
-                  style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white.withOpacity(0.9))),
+              Text(
+                draft.city.isEmpty ? 'Your city' : draft.city,
+                style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
+              ),
               if (draft.bio.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Text(draft.bio, style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white)),
@@ -655,9 +676,7 @@ class _ReviewStep extends ConsumerWidget {
           const SizedBox(height: 16),
         ],
         const SectionLabel('Personality snapshot'),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+        VcCard(
           child: TraitRadarChart(
             values: kTraitKeys.map((k) => draft.traits[k] ?? 50).toList(),
             labels: kTraitKeys.map((k) => kTraitLabels[k]!.split(' ').first).toList(),

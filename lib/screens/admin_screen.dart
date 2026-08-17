@@ -7,6 +7,7 @@ import '../providers/providers.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
+import 'onboarding_screen.dart';
 
 /// Entry point for the admin panel. Always route through this helper
 /// rather than pushing [AdminScreen] directly — it enforces the PIN
@@ -130,7 +131,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
       context,
       title: 'Delete ${profile.name.isEmpty ? "this profile" : profile.name}?',
       message: isSelf
-          ? 'This is your own profile. Deleting it will sign you out of this device permanently. This can\'t be undone.'
+          ? 'This is your own matching profile. You\'ll stay logged in and can create a new one. This can\'t be undone.'
           : 'This permanently removes this profile and its matches. This can\'t be undone.',
       confirmLabel: 'Delete',
       destructive: true,
@@ -141,15 +142,26 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
     try {
       await ref.read(apiServiceProvider).deleteProfile(profile.id!);
       if (isSelf) {
-        await ref.read(localStoreProvider).clearProfileId();
-        ref.read(profileIdProvider.notifier).state = null;
+        final user = ref.read(currentUserProvider);
+        if (user != null) {
+          final updated = await ref.read(authServiceProvider).linkProfile(user.id, null);
+          await applySession(ref, updated);
+        } else {
+          await ref.read(localStoreProvider).clearProfileId();
+          ref.read(profileIdProvider.notifier).state = null;
+        }
         ref.read(profileDraftProvider.notifier).reset();
       }
       ref.invalidate(allProfilesProvider);
       if (isSelf) ref.invalidate(myProfileProvider);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${profile.name.isEmpty ? "Profile" : profile.name} deleted')),
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${profile.name.isEmpty ? "Profile" : profile.name} deleted')),
+      );
+      if (isSelf) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute<void>(builder: (_) => const OnboardingScreen()),
+          (route) => false,
         );
       }
     } catch (e) {
@@ -164,60 +176,58 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
   }
 
   void _showDetail(Profile profile) {
-    showModalBottomSheet(
+    showVcSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.6,
-        maxChildSize: 0.9,
-        builder: (ctx, scrollController) => ListView(
-          controller: scrollController,
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(color: AppColors.ink.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.only(top: 40),
+          child: VcSheetScaffold(
+            title: '${profile.name}, ${profile.age}',
+            subtitle: profile.city.isEmpty ? null : profile.city,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.72),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+                children: [
+                  Center(child: VcAvatar(name: profile.name, radius: 36, imageBytes: profile.photoBytes)),
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    'ID: ${profile.id ?? "—"}',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(ctx).textTheme.bodyMedium,
+                  ),
+                  if (profile.bio.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    const SectionLabel('Bio'),
+                    Text(profile.bio),
+                  ],
+                  if (profile.goals.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    const SectionLabel('Looking for'),
+                    Text(profile.goals),
+                  ],
+                  if (profile.interests.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    const SectionLabel('Interests'),
+                    Wrap(spacing: 8, runSpacing: 8, children: profile.interests.map((i) => VcPill(i)).toList()),
+                  ],
+                  if (profile.values.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    const SectionLabel('Core values'),
+                    Wrap(spacing: 8, runSpacing: 8, children: profile.values.map((v) => VcPill(v, filled: true)).toList()),
+                  ],
+                  const SizedBox(height: 16),
+                  const SectionLabel('Personality'),
+                  TraitRadarChart(
+                    values: kTraitKeys.map((k) => profile.traits[k] ?? 50).toList(),
+                    labels: kTraitKeys.map((k) => kTraitLabels[k]!.split(' ').first).toList(),
+                  ),
+                ],
               ),
             ),
-            Text('${profile.name}, ${profile.age}', style: Theme.of(ctx).textTheme.headlineSmall),
-            if (profile.city.isNotEmpty) Text(profile.city, style: Theme.of(ctx).textTheme.bodyMedium),
-            const SizedBox(height: 4),
-            SelectableText('ID: ${profile.id ?? "—"}', style: Theme.of(ctx).textTheme.bodyMedium),
-            if (profile.bio.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const SectionLabel('Bio'),
-              Text(profile.bio),
-            ],
-            if (profile.goals.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const SectionLabel('Looking for'),
-              Text(profile.goals),
-            ],
-            if (profile.interests.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const SectionLabel('Interests'),
-              Wrap(spacing: 8, runSpacing: 8, children: profile.interests.map((i) => Chip(label: Text(i))).toList()),
-            ],
-            if (profile.values.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const SectionLabel('Core values'),
-              Wrap(spacing: 8, runSpacing: 8, children: profile.values.map((v) => Chip(label: Text(v))).toList()),
-            ],
-            const SizedBox(height: 16),
-            const SectionLabel('Personality'),
-            TraitRadarChart(
-              values: kTraitKeys.map((k) => profile.traits[k] ?? 50).toList(),
-              labels: kTraitKeys.map((k) => kTraitLabels[k]!.split(' ').first).toList(),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -242,7 +252,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
           children: [
             Container(
               width: double.infinity,
-              color: AppColors.indigo.withOpacity(0.06),
+              color: AppColors.indigo.withValues(alpha: 0.06),
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
               child: Row(
                 children: [
@@ -297,20 +307,13 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
                         final profile = filtered[i];
                         final isSelf = profile.id != null && profile.id == myId;
                         final isDeleting = _deletingIds.contains(profile.id);
-                        return Container(
+                        return VcCard(
                           padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(18),
-                            boxShadow: [
-                              BoxShadow(color: AppColors.ink.withOpacity(0.05), blurRadius: 12, offset: const Offset(0, 4)),
-                            ],
-                          ),
                           child: Row(
                             children: [
                               CircleAvatar(
                                 radius: 22,
-                                backgroundColor: AppColors.indigo.withOpacity(0.12),
+                                backgroundColor: AppColors.indigo.withValues(alpha: 0.12),
                                 child: Text(
                                   profile.name.isNotEmpty ? profile.name[0].toUpperCase() : '?',
                                   style: const TextStyle(color: AppColors.indigo, fontWeight: FontWeight.w700),
@@ -337,7 +340,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                               decoration: BoxDecoration(
-                                                color: AppColors.coral.withOpacity(0.14),
+                                                color: AppColors.coral.withValues(alpha: 0.14),
                                                 borderRadius: BorderRadius.circular(8),
                                               ),
                                               child: const Text('You', style: TextStyle(fontSize: 11, color: AppColors.coralDeep, fontWeight: FontWeight.w600)),

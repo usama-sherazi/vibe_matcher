@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 /// Big Five trait keys, in the order the API/UI present them.
 const List<String> kTraitKeys = [
   'openness',
@@ -59,6 +62,71 @@ const List<String> kSupportStyleOptions = [
   'calm advisor', 'accountability partner',
 ];
 
+const _placeholderNames = {'someone', 'somebody', 'unknown', 'n/a', 'na'};
+
+String personNameFrom(Map<String, dynamic> json, {String? city}) {
+  for (final key in ['name', 'full_name', 'profile_name', 'candidate_name', 'display_name']) {
+    final value = json[key]?.toString().trim() ?? '';
+    if (value.isNotEmpty && !_placeholderNames.contains(value.toLowerCase())) {
+      return value;
+    }
+  }
+  final nested = json['profile'] ?? json['match'] ?? json['candidate'];
+  if (nested is Map<String, dynamic>) {
+    return personNameFrom(nested, city: city ?? nested['city']?.toString());
+  }
+  final fallbackCity = (city ?? json['city']?.toString() ?? '').trim();
+  if (fallbackCity.isNotEmpty) return fallbackCity;
+  return '';
+}
+
+String displayNameFor(String name, String city, {String fallback = 'Match'}) {
+  final trimmed = name.trim();
+  if (trimmed.isNotEmpty && !_placeholderNames.contains(trimmed.toLowerCase())) {
+    return trimmed;
+  }
+  final cityTrim = city.trim();
+  if (cityTrim.isNotEmpty) return cityTrim;
+  return fallback;
+}
+
+String withRealName(String text, String name) {
+  final replacement = name.trim().isNotEmpty ? name.trim() : 'this match';
+  return text.replaceAll(RegExp(r'\bSomeone\b', caseSensitive: false), replacement);
+}
+
+List<String> withRealNameList(List<String> items, String name) {
+  return items.map((item) => withRealName(item, name)).toList();
+}
+
+Uint8List? decodeProfilePhoto(dynamic raw) {
+  if (raw == null) return null;
+  var value = raw.toString().trim();
+  if (value.isEmpty) return null;
+  if (value.contains(',')) value = value.split(',').last;
+  try {
+    final bytes = base64Decode(value);
+    return bytes.isEmpty ? null : bytes;
+  } catch (_) {
+    return null;
+  }
+}
+
+Uint8List? photoFromJson(Map<String, dynamic> json) {
+  final extras = json['extras'];
+  final fromExtras = extras is Map ? extras['photo'] : null;
+  return decodeProfilePhoto(json['photo'] ?? json['image'] ?? json['avatar'] ?? fromExtras);
+}
+
+Map<String, dynamic> _extrasFromJson(Map<String, dynamic> map) {
+  final extras = (map['extras'] as Map?)?.map((k, v) => MapEntry(k.toString(), v)) ?? <String, dynamic>{};
+  final photo = map['photo'] ?? map['image'] ?? map['avatar'] ?? extras['photo'];
+  if (photo != null && extras['photo'] == null) {
+    extras['photo'] = photo;
+  }
+  return extras;
+}
+
 /// The core Profile object the app creates, edits, and matches on.
 class Profile {
   final String? id;
@@ -105,22 +173,26 @@ class Profile {
       );
 
   factory Profile.fromJson(Map<String, dynamic> json) {
-    final rawInterests = json['interests'];
+    final nested = json['profile'];
+    final map = nested is Map
+        ? {'id': json['id'], ...Map<String, dynamic>.from(nested)}
+        : json;
+    final rawInterests = map['interests'];
     final interestsList = rawInterests is String
         ? rawInterests.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList()
         : <String>[];
     return Profile(
-      id: json['id'] as String?,
-      name: json['name'] as String? ?? '',
-      age: (json['age'] as num?)?.toInt() ?? 18,
-      city: json['city'] as String? ?? '',
-      bio: json['bio'] as String? ?? '',
+      id: map['id'] as String? ?? json['id'] as String?,
+      name: personNameFrom(map, city: map['city']?.toString()),
+      age: (map['age'] as num?)?.toInt() ?? 18,
+      city: map['city'] as String? ?? '',
+      bio: map['bio'] as String? ?? '',
       interests: interestsList,
-      goals: json['goals'] as String? ?? '',
-      values: (json['values'] as List?)?.map((e) => e.toString()).toList() ?? [],
-      traits: (json['traits'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v as num).toInt())) ??
+      goals: map['goals'] as String? ?? '',
+      values: (map['values'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      traits: (map['traits'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v as num).toInt())) ??
           {for (final k in kTraitKeys) k: 50},
-      extras: (json['extras'] as Map?)?.map((k, v) => MapEntry(k.toString(), v)) ?? {},
+      extras: _extrasFromJson(map),
     );
   }
 
@@ -136,6 +208,8 @@ class Profile {
         'traits': traits,
         'extras': extras,
       };
+
+  Uint8List? get photoBytes => photoFromJson({'extras': extras, 'photo': extras['photo']});
 
   Profile copyWith({
     String? id,
@@ -175,6 +249,7 @@ class MatchResult {
   final List<String> strengths;
   final List<String> watchouts;
   final String suggestedOpener;
+  final Uint8List? photoBytes;
 
   const MatchResult({
     required this.matchId,
@@ -186,19 +261,65 @@ class MatchResult {
     required this.strengths,
     required this.watchouts,
     required this.suggestedOpener,
+    this.photoBytes,
   });
 
-  factory MatchResult.fromJson(Map<String, dynamic> json) => MatchResult(
-        matchId: json['match_id']?.toString() ?? '',
-        name: json['name'] as String? ?? 'Someone',
-        age: (json['age'] as num?)?.toInt() ?? 0,
-        city: json['city'] as String? ?? '',
-        score: (json['score'] as num?)?.toDouble() ?? 0,
-        summary: json['summary'] as String? ?? '',
-        strengths: (json['strengths'] as List?)?.map((e) => e.toString()).toList() ?? [],
-        watchouts: (json['watchouts'] as List?)?.map((e) => e.toString()).toList() ?? [],
-        suggestedOpener: json['suggested_opener'] as String? ?? '',
-      );
+  bool get hasRealName {
+    final trimmed = name.trim();
+    return trimmed.isNotEmpty && !_placeholderNames.contains(trimmed.toLowerCase());
+  }
+
+  String get displayName => displayNameFor(name, city);
+
+  factory MatchResult.fromJson(Map<String, dynamic> json) {
+    final nested = json['match'] is Map
+        ? Map<String, dynamic>.from(json['match'] as Map)
+        : json;
+    final name = personNameFrom({...json, ...nested}, city: nested['city']?.toString() ?? json['city']?.toString());
+    final city = nested['city'] as String? ?? json['city'] as String? ?? '';
+    final shown = displayNameFor(name, city, fallback: 'this match');
+    return MatchResult(
+      matchId: (json['match_id'] ?? nested['match_id'] ?? nested['id'])?.toString() ?? '',
+      name: name,
+      age: (nested['age'] as num?)?.toInt() ?? (json['age'] as num?)?.toInt() ?? 0,
+      city: city,
+      score: (json['score'] as num?)?.toDouble() ?? 0,
+      summary: withRealName(json['summary'] as String? ?? '', shown),
+      strengths: withRealNameList((json['strengths'] as List?)?.map((e) => e.toString()).toList() ?? [], shown),
+      watchouts: withRealNameList((json['watchouts'] as List?)?.map((e) => e.toString()).toList() ?? [], shown),
+      suggestedOpener: withRealName(json['suggested_opener'] as String? ?? '', shown),
+      photoBytes: photoFromJson(nested) ?? photoFromJson(json),
+    );
+  }
+
+  MatchResult copyWith({
+    String? matchId,
+    String? name,
+    int? age,
+    String? city,
+    double? score,
+    String? summary,
+    List<String>? strengths,
+    List<String>? watchouts,
+    String? suggestedOpener,
+    Uint8List? photoBytes,
+  }) {
+    final resolvedName = name ?? this.name;
+    final resolvedCity = city ?? this.city;
+    final shown = displayNameFor(resolvedName, resolvedCity, fallback: 'this match');
+    return MatchResult(
+      matchId: matchId ?? this.matchId,
+      name: resolvedName,
+      age: age ?? this.age,
+      city: resolvedCity,
+      score: score ?? this.score,
+      summary: summary ?? withRealName(this.summary, shown),
+      strengths: strengths ?? withRealNameList(this.strengths, shown),
+      watchouts: watchouts ?? withRealNameList(this.watchouts, shown),
+      suggestedOpener: suggestedOpener ?? withRealName(this.suggestedOpener, shown),
+      photoBytes: photoBytes ?? this.photoBytes,
+    );
+  }
 }
 
 /// Full compatibility breakdown from the compare endpoint. The exact
@@ -217,6 +338,7 @@ class MatchDetail extends MatchResult {
     required super.strengths,
     required super.watchouts,
     required super.suggestedOpener,
+    super.photoBytes,
     required this.raw,
   });
 
@@ -232,6 +354,7 @@ class MatchDetail extends MatchResult {
       strengths: base.strengths,
       watchouts: base.watchouts,
       suggestedOpener: base.suggestedOpener,
+      photoBytes: base.photoBytes,
       raw: json,
     );
   }
